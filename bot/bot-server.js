@@ -271,8 +271,8 @@ Ilova bilan ulanish uchun /pair buyrug'ini bosing va kodni kiriting.
   `);
 });
 
-// /pair command
-bot.onText(/\/pair/, (msg) => {
+// /pair command (without code)
+bot.onText(/^\/pair$/, (msg) => {
   const chatId = msg.chat.id;
   awaitingPairCode.add(chatId);
   bot.sendMessage(chatId, `
@@ -283,8 +283,8 @@ Masalan: 123456
   `);
 });
 
-// /pair with code
-bot.onText(/\/pair (.+)/, async (msg, match) => {
+// /pair with code (e.g., /pair 123456)
+bot.onText(/^\/pair\s+(.+)$/, async (msg, match) => {
   const chatId = msg.chat.id;
   const code = match[1].trim();
 
