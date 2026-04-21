@@ -76,6 +76,30 @@ app.post('/pairing', (req, res) => {
   return res.json({ ok: true });
 });
 
+app.post('/notify', async (req, res) => {
+  // Optional simple protection (set API_KEY on server and in app)
+  if (API_KEY) {
+    const headerKey = req.header('x-api-key') || '';
+    if (headerKey !== API_KEY) return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+
+  const { userId, message, parseMode } = req.body || {};
+  if (!userId || !message) return res.status(400).json({ ok: false, error: 'missing userId/message' });
+
+  const targetUser = Object.values(botData.users).find(u => String(u.userId) === String(userId));
+  if (!targetUser) return res.status(404).json({ ok: false, error: 'user_not_paired' });
+
+  try {
+    await bot.sendMessage(targetUser.chatId, String(message), {
+      parse_mode: parseMode === 'HTML' ? 'HTML' : undefined,
+      disable_web_page_preview: true,
+    });
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: 'send_failed' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`HTTP API listening on :${PORT}`);
 });
