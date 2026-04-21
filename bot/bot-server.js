@@ -44,6 +44,8 @@ function saveData(data) {
 let botData = loadData();
 // In-memory state: who is currently entering pairing code
 const awaitingPairCode = new Set();
+// Password reset codes storage (in-memory, expires in 15 minutes)
+const passwordResetCodes = {};
 
 // --- HTTP API for app -> bot pairing codes ---
 const app = express();
@@ -98,6 +100,90 @@ app.post('/notify', async (req, res) => {
   } catch (e) {
     return res.status(500).json({ ok: false, error: 'send_failed' });
   }
+});
+
+// Request password reset via Telegram
+app.post('/request-password-reset', async (req, res) => {
+  // Optional simple protection
+  if (API_KEY) {
+    const headerKey = req.header('x-api-key') || '';
+    if (headerKey !== API_KEY) return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+
+  const { userId, userName } = req.body || {};
+  if (!userId) return res.status(400).json({ ok: false, error: 'missing userId' });
+
+  // Find user in botData
+  const targetUser = Object.values(botData.users).find(u => String(u.userId) === String(userId));
+  if (!targetUser) {
+    return res.status(404).json({ ok: false, error: 'user_not_paired' });
+  }
+
+  // Generate 6-digit reset code
+  const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+  
+  // Store reset code (expires in 15 minutes)
+  passwordResetCodes[resetCode] = {
+    userId: String(userId),
+    timestamp: Date.now(),
+    expiresAt: Date.now() + (15 * 60 * 1000), // 15 minutes
+    userName: userName || targetUser.userName || ''
+  };
+
+  try {
+    // Send reset code via Telegram
+    await bot.sendMessage(targetUser.chatId, 
+      `🔐 <b>PAROLNI QAYTA TIKLASH</b>\n\n` +
+      `👤 ${userName || targetUser.userName}\n\n` +
+      `Kod: <code>${resetCode}</code>\n\n` +
+      `⏰ Bu kod <b>15 daqiqa</b> amal qiladi\n` +
+      `⚠️ Bu kodni hech kimga bermang!`,
+      {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+      }
+    );
+    
+    console.log(`Password reset code sent: ${resetCode} for user ${userId}`);
+    return res.json({ ok: true, message: 'Reset code sent via Telegram' });
+  } catch (e) {
+    console.error('Error sending reset code:', e);
+    return res.status(500).json({ ok: false, error: 'send_failed' });
+  }
+});
+
+// Verify password reset code
+app.post('/verify-reset-code', (req, res) => {
+  // Optional simple protection
+  if (API_KEY) {
+    const headerKey = req.header('x-api-key') || '';
+    if (headerKey !== API_KEY) return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+
+  const { code, userId } = req.body || {};
+  if (!code || !userId) return res.status(400).json({ ok: false, error: 'missing code/userId' });
+
+  const resetData = passwordResetCodes[String(code).trim()];
+  
+  if (!resetData) {
+    return res.status(400).json({ ok: false, error: 'invalid_code', message: 'Kod topilmadi' });
+  }
+
+  // Check if code is expired
+  if (Date.now() > resetData.expiresAt) {
+    delete passwordResetCodes[String(code).trim()];
+    return res.status(400).json({ ok: false, error: 'expired', message: 'Kod muddati tugagan' });
+  }
+
+  // Check if userId matches
+  if (resetData.userId !== String(userId)) {
+    return res.status(400).json({ ok: false, error: 'user_mismatch', message: 'Foydalanuvchi mos kelmadi' });
+  }
+
+  // Code is valid, delete it (one-time use)
+  delete passwordResetCodes[String(code).trim()];
+  
+  return res.json({ ok: true, verified: true, message: 'Kod tasdiqlandi' });
 });
 
 app.listen(PORT, () => {
