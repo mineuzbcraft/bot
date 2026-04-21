@@ -47,18 +47,18 @@ let botData = loadData();
 function sendDailyStats() {
   const now = new Date();
   const hour = now.getHours();
-  
+
   // Check if it's 21:00 (9 PM)
   if (hour === 21) {
     const today = now.toISOString().split('T')[0];
-    
+
     // Send to all connected users
     Object.values(botData.users).forEach(async (user) => {
       try {
         const stats = dailyStats[user.userId];
-        
+
         let message;
-        
+
         if (stats && stats.date === today) {
           // Real stats available
           if (stats.isOffline) {
@@ -82,7 +82,7 @@ function sendDailyStats() {
               `❌ Mag'lubiyat: ${stats.misses}\n` +
               `🔥 Streak: ${stats.streak} kun\n` +
               `🎯 Maqsadlar: ${stats.goals} ta\n\n`;
-            
+
             // Add motivational message based on performance
             if (stats.wins > 0 && stats.misses === 0) {
               message += `💪 Ajoyib natija! Hamma maqsadlar bajarildi!`;
@@ -104,7 +104,7 @@ function sendDailyStats() {
             `Iltimos, ilovani oching va maqsadlaringizni belgilang!\n\n` +
             `💪 Ertaga yanada yaxshiroq bo'lsin!`;
         }
-        
+
         await bot.sendMessage(user.chatId, message, {
           parse_mode: 'HTML',
           disable_web_page_preview: true,
@@ -120,11 +120,11 @@ function sendDailyStats() {
 // Check every hour if it's 21:00
 setInterval(sendDailyStats, 60 * 60 * 1000); // Check every hour
 console.log('Daily stats scheduler started (21:00)');
+
 // In-memory state: who is currently entering pairing code
 const awaitingPairCode = new Set();
 // Password reset codes storage (in-memory, expires in 15 minutes)
 const passwordResetCodes = {};
-
 // Daily stats storage (in-memory, expires daily)
 const dailyStats = {};
 
@@ -202,7 +202,7 @@ app.post('/request-password-reset', async (req, res) => {
 
   // Generate 6-digit reset code
   const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
-  
+
   // Store reset code (expires in 15 minutes)
   passwordResetCodes[resetCode] = {
     userId: String(userId),
@@ -224,7 +224,7 @@ app.post('/request-password-reset', async (req, res) => {
         disable_web_page_preview: true,
       }
     );
-    
+
     console.log(`Password reset code sent: ${resetCode} for user ${userId}`);
     return res.json({ ok: true, message: 'Reset code sent via Telegram' });
   } catch (e) {
@@ -245,7 +245,7 @@ app.post('/verify-reset-code', (req, res) => {
   if (!code || !userId) return res.status(400).json({ ok: false, error: 'missing code/userId' });
 
   const resetData = passwordResetCodes[String(code).trim()];
-  
+
   if (!resetData) {
     return res.status(400).json({ ok: false, error: 'invalid_code', message: 'Kod topilmadi' });
   }
@@ -263,7 +263,7 @@ app.post('/verify-reset-code', (req, res) => {
 
   // Code is valid, delete it (one-time use)
   delete passwordResetCodes[String(code).trim()];
-  
+
   return res.json({ ok: true, verified: true, message: 'Kod tasdiqlandi' });
 });
 
@@ -292,7 +292,7 @@ app.post('/daily-stats', (req, res) => {
   };
 
   console.log(`Daily stats received for user ${userId} (${userName}):`, dailyStats[userId]);
-  
+
   return res.json({ ok: true, message: 'Stats received' });
 });
 
@@ -303,7 +303,7 @@ app.listen(PORT, () => {
 function handlePairingCode(chatId, codeRaw) {
   const code = String(codeRaw || '').trim();
   if (!code) {
-    bot.sendMessage(chatId, '❌ Kod bo‘sh. 6 xonali kodni yuboring.');
+    bot.sendMessage(chatId, '❌ Kod bo\'sh. 6 xonali kodni yuboring.');
     return;
   }
 
@@ -357,29 +357,214 @@ function handlePairingCode(chatId, codeRaw) {
       { command: 'start', description: 'Botni boshlash' },
       { command: 'pair', description: 'Ilova bilan ulanish' },
       { command: 'stat', description: 'Statistika ko\'rish' },
-      { command: 'send', description: 'Notification yuborish' }
+      { command: 'send', description: 'Notification yuborish' },
+      { command: 'reset', description: 'Parolni tiklash' },
+      { command: 'disconnect', description: 'Ulanishni uzish' },
+      { command: 'help', description: 'Yordam' }
     ]);
   } else {
     bot.sendMessage(chatId, '❌ Noto\'g\'ri kod. Kodni tekshiring va qayta urinib ko\'ring.');
   }
 }
 
-// /start command
+// /start command with menu
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
+  const user = botData.users[chatId];
   
-  bot.sendMessage(chatId, `
-🏆 MSR F Team Alarm Bot
+  const menuKeyboard = {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: '🔗 Ilova bilan ulanish', callback_data: 'pair' },
+          { text: '📊 Statistika', callback_data: 'stat' }
+        ],
+        [
+          { text: '📢 Notification', callback_data: 'send' },
+          { text: '🔐 Parolni tiklash', callback_data: 'reset' }
+        ],
+        [
+          { text: '❌ Ulanishni uzish', callback_data: 'disconnect' },
+          { text: '❓ Yordam', callback_data: 'help' }
+        ]
+      ]
+    }
+  };
+
+  if (user) {
+    bot.sendMessage(chatId, `
+🏆 <b>MSR F Team Alarm Bot</b>
+
+👤 Foydalanuvchi: ${user.userName} ${user.userSurname}
+🆔 ID: ${user.userId}
+✅ Ulangan
+
+📋 Menyu:
+🔗 /pair - Ilova bilan ulanish
+📊 /stat - Statistika ko'rish
+📢 /send - Notification yuborish
+🔐 /reset - Parolni tiklash
+❌ /disconnect - Ulanishni uzish
+❓ /help - Yordam
+    `, { parse_mode: 'HTML', ...menuKeyboard });
+  } else {
+    bot.sendMessage(chatId, `
+🏆 <b>MSR F Team Alarm Bot</b>
+
+❌ Hali ulanmagan
+
+📋 Menyu:
+🔗 /pair - Ilova bilan ulanish
+❓ /help - Yordam
+
+Ulanish uchun:
+1. Ilovada "BOTNI ULASH" tugmasini bosing
+2. Kodni nusxa qiling
+3. /pair kod yuboring
+    `, { parse_mode: 'HTML', ...menuKeyboard });
+  }
+});
+
+// Callback query handler
+bot.on('callback_query', (callbackQuery) => {
+  const chatId = callbackQuery.message.chat.id;
+  const data = callbackQuery.data;
+
+  switch (data) {
+    case 'pair':
+      awaitingPairCode.add(chatId);
+      bot.sendMessage(chatId, `
+🔗 Ulanish kodi
+
+Ilovada chiqqan 6 xonali kodni shu yerga yuboring.
+Masalan: 123456
+      `);
+      break;
+    case 'stat':
+      handleStatCommand(chatId);
+      break;
+    case 'send':
+      handleSendCommand(chatId);
+      break;
+    case 'reset':
+      handleResetCommand(chatId);
+      break;
+    case 'disconnect':
+      handleDisconnectCommand(chatId);
+      break;
+    case 'help':
+      bot.sendMessage(chatId, `
+🏆 <b>MSR F Team Alarm Bot - Yordam</b>
 
 📋 Buyruqlar:
+/start - Botni boshlash va menyu
 /pair - Ilova bilan ulanish
 /stat - Statistika ko'rish
 /send - Notification yuborish
+/reset - Parolni tiklash
+/disconnect - Ulanishni uzish
 /help - Yordam
 
-Ilova bilan ulanish uchun /pair buyrug'ini bosing va kodni kiriting.
-  `);
+🔗 Ulanish:
+1. Ilovada "BOTNI ULASH" tugmasini bosing
+2. Kodni nusxa qiling
+3. Telegramda /pair kod yuboring
+4. Muvaffaqiyatli ulanishingiz!
+
+❓ Savollar uchun: @msrfteam
+      `, { parse_mode: 'HTML' });
+      break;
+  }
+
+  bot.answerCallbackQuery(callbackQuery.id);
 });
+
+// Helper functions
+function handleStatCommand(chatId) {
+  const user = botData.users[chatId];
+  if (!user) {
+    bot.sendMessage(chatId, '❌ Avval ilova bilan ulaning. /pair buyrug\'idan foydalaning.');
+    return;
+  }
+
+  const today = new Date().toISOString().split('T')[0];
+  const stats = dailyStats[user.userId];
+
+  let message = `📊 Statistika - ${user.userName} ${user.userSurname}\n\n🆔 ID: ${user.userId}`;
+
+  if (stats && stats.date === today) {
+    message += `\n\n📅 Bugun (${today}):`;
+    if (stats.isOffline) {
+      message += `\n⚠️ Internet aloqasi yo'q`;
+    } else {
+      message += `\n✅ G'alaba: ${stats.wins}`;
+      message += `\n❌ Mag'lubiyat: ${stats.misses}`;
+    }
+    message += `\n🔥 Streak: ${stats.streak} kun`;
+    message += `\n🎯 Maqsadlar: ${stats.goals} ta`;
+  } else {
+    message += `\n\n📅 Bugun: (Ma'lumot yo'q)`;
+    message += `\n📆 Oylik: (Ma'lumot yo'q)`;
+    message += `\n🔥 Streak: (Ma'lumot yo'q)`;
+    message += `\n\n⚠️ Ilovani oching va bugungi maqsadlarni bajaring!`;
+  }
+
+  bot.sendMessage(chatId, message);
+}
+
+function handleSendCommand(chatId) {
+  const user = botData.users[chatId];
+  if (!user) {
+    bot.sendMessage(chatId, '❌ Avval ilova bilan ulaning. /pair buyrug\'idan foydalaning.');
+    return;
+  }
+
+  bot.sendMessage(chatId, `
+📢 Notification yuborish
+
+Ilovaga notification yuborish uchun /send xabar buyrug\'idan foydalaning.
+Masalan: /send Ertalab mashq qilishni unutmang!
+
+👤 Qabul qiluvchi: ${user.userName} ${user.userSurname}
+🆔 ID: ${user.userId}
+  `);
+}
+
+function handleResetCommand(chatId) {
+  const user = botData.users[chatId];
+  if (!user) {
+    bot.sendMessage(chatId, '❌ Avval ilova bilan ulangan bo\'lishingiz kerak.');
+    return;
+  }
+
+  bot.sendMessage(chatId, `
+🔐 Parolni tiklash
+
+Parolni tiklash uchun ilovada "Parolni unutdim" tugmasini bosing.
+Kod Telegram orqali yuboriladi.
+
+⏰ Kod 15 daqiqa amal qiladi
+⚠️ Kodni hech kimga bermang!
+  `);
+}
+
+function handleDisconnectCommand(chatId) {
+  const user = botData.users[chatId];
+  if (!user) {
+    bot.sendMessage(chatId, '❌ Siz allaqachon ulanmagan.');
+    return;
+  }
+
+  delete botData.users[chatId];
+  saveData(botData);
+
+  bot.sendMessage(chatId, `
+❌ Ulanish uzildi
+
+Siz bot bilan ulanishingizni uzdingiz.
+Qayta ulanish uchun /pair buyrug\'idan foydalaning.
+  `);
+}
 
 // /pair command (without code)
 bot.onText(/^\/pair$/, (msg) => {
@@ -418,57 +603,21 @@ bot.on('message', (msg) => {
 
 // /stat command
 bot.onText(/\/stat/, (msg) => {
-  const chatId = msg.chat.id;
-  const user = botData.users[chatId];
-  
-  if (!user) {
-    bot.sendMessage(chatId, '❌ Avval ilova bilan ulaning. /pair buyrug\'idan foydalaning.');
-    return;
-  }
-  
-  // Get today's stats if available
-  const today = new Date().toISOString().split('T')[0];
-  const stats = dailyStats[user.userId];
-  
-  let message = `📊 Statistika - ${user.userName} ${user.userSurname}\n\n🆔 ID: ${user.userId}`;
-  
-  if (stats && stats.date === today) {
-    // Real stats available
-    message += `\n\n📅 Bugun (${today}):`;
-    
-    if (stats.isOffline) {
-      message += `\n⚠️ Internet aloqasi yo'q`;
-    } else {
-      message += `\n✅ G'alaba: ${stats.wins}`;
-      message += `\n❌ Mag'lubiyat: ${stats.misses}`;
-    }
-    
-    message += `\n🔥 Streak: ${stats.streak} kun`;
-    message += `\n🎯 Maqsadlar: ${stats.goals} ta`;
-  } else {
-    message += `\n\n📅 Bugun: (Ma'lumot yo'q)`;
-    message += `\n📆 Oylik: (Ma'lumot yo'q)`;
-    message += `\n🔥 Streak: (Ma'lumot yo'q)`;
-    message += `\n\n⚠️ Ilovani oching va bugungi maqsadlarni bajaring!`;
-  }
-  
-  bot.sendMessage(chatId, message);
+  handleStatCommand(msg.chat.id);
 });
 
 // /send command
 bot.onText(/\/send(?:\s+(.+))?/, (msg, match) => {
   const chatId = msg.chat.id;
   const user = botData.users[chatId];
-  
+
   if (!user) {
-    bot.sendMessage(chatId, '❌ Avval ilova bilan ulaning. /pair buyrug\'idan foydalaning.');
+    bot.sendMessage(chatId, '❌ Avval ilova bilan ulangan bo\'lishingiz kerak. /pair buyrug\'idan foydalaning.');
     return;
   }
-  
+
   const message = match[1] || 'Test notification';
-  
-  // Here you would send notification to the app via Expo Push Notifications
-  // For now, just confirm
+
   bot.sendMessage(chatId, `
 📢 Notification yuborildi
 
@@ -481,30 +630,38 @@ Xabar: "${message}"
   `);
 });
 
+// /reset command
+bot.onText(/\/reset/, (msg) => {
+  handleResetCommand(msg.chat.id);
+});
+
+// /disconnect command
+bot.onText(/\/disconnect/, (msg) => {
+  handleDisconnectCommand(msg.chat.id);
+});
+
 // /help command
 bot.onText(/\/help/, (msg) => {
   bot.sendMessage(msg.chat.id, `
-🏆 MSR F Team Alarm Bot - Yordam
+🏆 <b>MSR F Team Alarm Bot - Yordam</b>
 
 📋 Buyruqlar:
-/start - Botni boshlash
+/start - Botni boshlash va menyu
 /pair - Ilova bilan ulanish
 /stat - Statistika ko'rish
 /send - Notification yuborish
+/reset - Parolni tiklash
+/disconnect - Ulanishni uzish
 /help - Yordam
 
 🔗 Ulanish:
-1. Ilovada "KOD GENERATSIYA QILISH" tugmasini bosing
+1. Ilovada "BOTNI ULASH" tugmasini bosing
 2. Kodni nusxa qiling
 3. Telegramda /pair kod yuboring
 4. Muvaffaqiyatli ulanishingiz!
 
 ❓ Savollar uchun: @msrfteam
-  `);
+  `, { parse_mode: 'HTML' });
 });
-
-// Webhook endpoint for app to send pairing codes
-// You can deploy this to a server like Render, Heroku, etc.
-// For now, this is a simple polling bot
 
 console.log('Bot is running...');
