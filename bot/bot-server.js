@@ -42,10 +42,91 @@ function saveData(data) {
 
 // Initialize data
 let botData = loadData();
+
+// Daily stats at 21:00 (9 PM)
+function sendDailyStats() {
+  const now = new Date();
+  const hour = now.getHours();
+  
+  // Check if it's 21:00 (9 PM)
+  if (hour === 21) {
+    const today = now.toISOString().split('T')[0];
+    
+    // Send to all connected users
+    Object.values(botData.users).forEach(async (user) => {
+      try {
+        const stats = dailyStats[user.userId];
+        
+        let message;
+        
+        if (stats && stats.date === today) {
+          // Real stats available
+          if (stats.isOffline) {
+            // User was offline
+            message = 
+              `📊 <b>KUNLIK STATISTIKA</b>\n\n` +
+              `👤 ${stats.userName || user.userName} ${user.userSurname}\n` +
+              `📅 Sana: ${today}\n\n` +
+              `⚠️ <b>Internet aloqasi yo'q!</b>\n` +
+              `Ilova ma'lumotlarni yubora olmadi.\n\n` +
+              `🔥 Streak: ${stats.streak} kun\n` +
+              `🎯 Maqsadlar: ${stats.goals} ta\n\n` +
+              `💕 Internetni yoqing va ertaga qayta urinib ko'ring!`;
+          } else {
+            // Real data
+            message = 
+              `📊 <b>KUNLIK STATISTIKA</b>\n\n` +
+              `👤 ${stats.userName || user.userName} ${user.userSurname}\n` +
+              `📅 Sana: ${today}\n\n` +
+              `✅ G'alaba: ${stats.wins}\n` +
+              `❌ Mag'lubiyat: ${stats.misses}\n` +
+              `🔥 Streak: ${stats.streak} kun\n` +
+              `🎯 Maqsadlar: ${stats.goals} ta\n\n`;
+            
+            // Add motivational message based on performance
+            if (stats.wins > 0 && stats.misses === 0) {
+              message += `💪 Ajoyib natija! Hamma maqsadlar bajarildi!`;
+            } else if (stats.wins > stats.misses) {
+              message += `🔘 Yaxshi natija! Davom eting!`;
+            } else if (stats.wins === 0 && stats.misses === 0) {
+              message += `📝 Bugun ma'lumot yo'q. Ertaga boshlang!`;
+            } else {
+              message += `💕 Ertaga yanada yaxshiroq bo'lsin!`;
+            }
+          }
+        } else {
+          // No data received
+          message = 
+            `📊 <b>KUNLIK STATISTIKA</b>\n\n` +
+            `👤 ${user.userName} ${user.userSurname}\n` +
+            `📅 Sana: ${today}\n\n` +
+            `⚠️ Bugungi ma'lumotlar olinmadi.\n` +
+            `Iltimos, ilovani oching va maqsadlaringizni belgilang!\n\n` +
+            `💪 Ertaga yanada yaxshiroq bo'lsin!`;
+        }
+        
+        await bot.sendMessage(user.chatId, message, {
+          parse_mode: 'HTML',
+          disable_web_page_preview: true,
+        });
+        console.log(`Daily stats sent to ${user.userName}`);
+      } catch (error) {
+        console.error(`Failed to send daily stats to ${user.userName}:`, error);
+      }
+    });
+  }
+}
+
+// Check every hour if it's 21:00
+setInterval(sendDailyStats, 60 * 60 * 1000); // Check every hour
+console.log('Daily stats scheduler started (21:00)');
 // In-memory state: who is currently entering pairing code
 const awaitingPairCode = new Set();
 // Password reset codes storage (in-memory, expires in 15 minutes)
 const passwordResetCodes = {};
+
+// Daily stats storage (in-memory, expires daily)
+const dailyStats = {};
 
 // --- HTTP API for app -> bot pairing codes ---
 const app = express();
@@ -186,6 +267,35 @@ app.post('/verify-reset-code', (req, res) => {
   return res.json({ ok: true, verified: true, message: 'Kod tasdiqlandi' });
 });
 
+// Endpoint to receive daily stats from app
+app.post('/daily-stats', (req, res) => {
+  // Optional simple protection
+  if (API_KEY) {
+    const headerKey = req.header('x-api-key') || '';
+    if (headerKey !== API_KEY) return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+
+  const { userId, date, wins, misses, streak, goals, userName, isOffline } = req.body || {};
+  if (!userId || !date) return res.status(400).json({ ok: false, error: 'missing userId/date' });
+
+  // Store daily stats
+  dailyStats[userId] = {
+    userId,
+    date,
+    wins: wins || 0,
+    misses: misses || 0,
+    streak: streak || 0,
+    goals: goals || 0,
+    userName: userName || '',
+    isOffline: isOffline || false,
+    receivedAt: Date.now()
+  };
+
+  console.log(`Daily stats received for user ${userId} (${userName}):`, dailyStats[userId]);
+  
+  return res.json({ ok: true, message: 'Stats received' });
+});
+
 app.listen(PORT, () => {
   console.log(`HTTP API listening on :${PORT}`);
 });
@@ -316,19 +426,33 @@ bot.onText(/\/stat/, (msg) => {
     return;
   }
   
-  // Here you would fetch actual stats from your app database
-  // For now, send a placeholder message
-  bot.sendMessage(chatId, `
-📊 Statistika - ${user.userName} ${user.userSurname}
-
-🆔 ID: ${user.userId}
-
-📅 Bugun: (Ma\'lumot yo\'q)
-📆 Oylik: (Ma\'lumot yo\'q)
-🔥 Streak: (Ma\'lumot yo\'q)
-
-⚠️ Bu bot server ilova bilan aloqa qilishi kerak.
-  `);
+  // Get today's stats if available
+  const today = new Date().toISOString().split('T')[0];
+  const stats = dailyStats[user.userId];
+  
+  let message = `📊 Statistika - ${user.userName} ${user.userSurname}\n\n🆔 ID: ${user.userId}`;
+  
+  if (stats && stats.date === today) {
+    // Real stats available
+    message += `\n\n📅 Bugun (${today}):`;
+    
+    if (stats.isOffline) {
+      message += `\n⚠️ Internet aloqasi yo'q`;
+    } else {
+      message += `\n✅ G'alaba: ${stats.wins}`;
+      message += `\n❌ Mag'lubiyat: ${stats.misses}`;
+    }
+    
+    message += `\n🔥 Streak: ${stats.streak} kun`;
+    message += `\n🎯 Maqsadlar: ${stats.goals} ta`;
+  } else {
+    message += `\n\n📅 Bugun: (Ma'lumot yo'q)`;
+    message += `\n📆 Oylik: (Ma'lumot yo'q)`;
+    message += `\n🔥 Streak: (Ma'lumot yo'q)`;
+    message += `\n\n⚠️ Ilovani oching va bugungi maqsadlarni bajaring!`;
+  }
+  
+  bot.sendMessage(chatId, message);
 });
 
 // /send command
