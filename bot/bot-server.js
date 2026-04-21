@@ -42,6 +42,8 @@ function saveData(data) {
 
 // Initialize data
 let botData = loadData();
+// In-memory state: who is currently entering pairing code
+const awaitingPairCode = new Set();
 
 // --- HTTP API for app -> bot pairing codes ---
 const app = express();
@@ -78,6 +80,70 @@ app.listen(PORT, () => {
   console.log(`HTTP API listening on :${PORT}`);
 });
 
+function handlePairingCode(chatId, codeRaw) {
+  const code = String(codeRaw || '').trim();
+  if (!code) {
+    bot.sendMessage(chatId, '❌ Kod bo‘sh. 6 xonali kodni yuboring.');
+    return;
+  }
+
+  // Check if pairing code exists
+  if (botData.pairingCodes[code]) {
+    const pairingData = botData.pairingCodes[code];
+
+    // Check if code is still valid (5 minutes)
+    const timeDiff = Date.now() - pairingData.timestamp;
+    if (timeDiff > 5 * 60 * 1000) {
+      bot.sendMessage(chatId, '❌ Kod muddati tugadi. Ilovadan qayta kod oling.');
+      return;
+    }
+
+    // Check if user is already connected
+    const existingUser = Object.values(botData.users).find(u => u.userId === pairingData.userId);
+    if (existingUser) {
+      // Update chatId if user reconnects
+      existingUser.chatId = chatId;
+      saveData(botData);
+      bot.sendMessage(chatId, `✅ Qayta ulandi!\n\n👤 ${pairingData.userName} ${pairingData.userSurname}\n🆔 ID: ${pairingData.userId}`);
+      return;
+    }
+
+    // Connect user
+    botData.users[chatId] = {
+      chatId: chatId,
+      userId: pairingData.userId,
+      userName: pairingData.userName,
+      userSurname: pairingData.userSurname,
+      connectedAt: Date.now()
+    };
+
+    // Remove used pairing code
+    delete botData.pairingCodes[code];
+    saveData(botData);
+
+    bot.sendMessage(chatId, `
+✅ Muvaffaqiyatli ulandi!
+
+👤 Ism: ${pairingData.userName}
+👤 Familiya: ${pairingData.userSurname}
+🆔 ID: ${pairingData.userId}
+
+📊 Statistika: /stat
+📢 Notification: /send
+    `);
+
+    // Set bot commands
+    bot.setMyCommands([
+      { command: 'start', description: 'Botni boshlash' },
+      { command: 'pair', description: 'Ilova bilan ulanish' },
+      { command: 'stat', description: 'Statistika ko\'rish' },
+      { command: 'send', description: 'Notification yuborish' }
+    ]);
+  } else {
+    bot.sendMessage(chatId, '❌ Noto\'g\'ri kod. Kodni tekshiring va qayta urinib ko\'ring.');
+  }
+}
+
 // /start command
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
@@ -98,13 +164,12 @@ Ilova bilan ulanish uchun /pair buyrug'ini bosing va kodni kiriting.
 // /pair command
 bot.onText(/\/pair/, (msg) => {
   const chatId = msg.chat.id;
-  
+  awaitingPairCode.add(chatId);
   bot.sendMessage(chatId, `
 🔗 Ulanish kodi
 
-Ilova generatsiya qilgan kodni kiriting:
-
-Masalan: /pair 123456
+Ilovada chiqqan 6 xonali kodni shu yerga yuboring.
+Masalan: 123456
   `);
 });
 
@@ -112,63 +177,23 @@ Masalan: /pair 123456
 bot.onText(/\/pair (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
   const code = match[1].trim();
-  
-  // Check if pairing code exists
-  if (botData.pairingCodes[code]) {
-    const pairingData = botData.pairingCodes[code];
-    
-    // Check if code is still valid (5 minutes)
-    const timeDiff = Date.now() - pairingData.timestamp;
-    if (timeDiff > 5 * 60 * 1000) {
-      bot.sendMessage(chatId, '❌ Kod muddati tugadi. Qayta kod oling.');
-      return;
-    }
-    
-    // Check if user is already connected
-    const existingUser = Object.values(botData.users).find(u => u.userId === pairingData.userId);
-    if (existingUser) {
-      // Update chatId if user reconnects
-      existingUser.chatId = chatId;
-      saveData(botData);
-      bot.sendMessage(chatId, `✅ Qayta ulandi!\n\n👤 ${pairingData.userName} ${pairingData.userSurname}\n🆔 ID: ${pairingData.userId}`);
-      return;
-    }
-    
-    // Connect user
-    botData.users[chatId] = {
-      chatId: chatId,
-      userId: pairingData.userId,
-      userName: pairingData.userName,
-      userSurname: pairingData.userSurname,
-      connectedAt: Date.now()
-    };
-    
-    // Remove used pairing code
-    delete botData.pairingCodes[code];
-    saveData(botData);
-    
-    bot.sendMessage(chatId, `
-✅ Muvaffaqiyatli ulandi!
 
-👤 Ism: ${pairingData.userName}
-👤 Familiya: ${pairingData.userSurname}
-🆔 ID: ${pairingData.userId}
+  awaitingPairCode.delete(chatId);
+  handlePairingCode(chatId, code);
+});
 
-📊 Statistika: /stat
-📢 Notification: /send
-    `);
-    
-    // Set bot commands
-    bot.setMyCommands([
-      { command: 'start', description: 'Botni boshlash' },
-      { command: 'pair', description: 'Ilova bilan ulanish' },
-      { command: 'stat', description: 'Statistika ko\'rish' },
-      { command: 'send', description: 'Notification yuborish' }
-    ]);
-    
-  } else {
-    bot.sendMessage(chatId, '❌ Noto\'g\'ri kod. Kodni tekshiring va qayta urinib ko\'ring.');
-  }
+// After /pair, accept next normal message as code
+bot.on('message', (msg) => {
+  const chatId = msg.chat?.id;
+  const text = msg.text;
+  if (!chatId || typeof text !== 'string') return;
+  if (!awaitingPairCode.has(chatId)) return;
+
+  // If user sends another command, keep waiting
+  if (text.trim().startsWith('/')) return;
+
+  awaitingPairCode.delete(chatId);
+  handlePairingCode(chatId, text);
 });
 
 // /stat command
