@@ -43,6 +43,33 @@ function saveData(data) {
 // Initialize data
 let botData = loadData();
 
+// Expo Push Notification function
+async function sendExpoPushNotification(pushToken, title, body, data = {}) {
+  try {
+    const response = await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify({
+        to: pushToken,
+        sound: 'default',
+        title,
+        body,
+        data,
+      }),
+    });
+
+    const result = await response.json();
+    console.log('Push notification sent:', result);
+    return result;
+  } catch (error) {
+    console.error('Failed to send push notification:', error);
+    throw error;
+  }
+}
+
 // Daily stats at 21:00 (9 PM)
 function sendDailyStats() {
   const now = new Date();
@@ -296,6 +323,58 @@ app.post('/daily-stats', (req, res) => {
   return res.json({ ok: true, message: 'Stats received' });
 });
 
+// Register push token
+app.post('/register-push-token', (req, res) => {
+  if (API_KEY) {
+    const headerKey = req.header('x-api-key') || '';
+    if (headerKey !== API_KEY) return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+
+  const { userId, pushToken } = req.body || {};
+  if (!userId || !pushToken) return res.status(400).json({ ok: false, error: 'missing userId/pushToken' });
+
+  // Find user and update push token
+  const targetUser = Object.values(botData.users).find(u => String(u.userId) === String(userId));
+  if (!targetUser) {
+    return res.status(404).json({ ok: false, error: 'user_not_paired' });
+  }
+
+  targetUser.pushToken = pushToken;
+  saveData(botData);
+
+  console.log(`Push token registered for user ${userId}`);
+
+  return res.json({ ok: true, message: 'Push token registered' });
+});
+
+// Fetch real-time stats from app (app calls this to update stats)
+app.post('/fetch-stats', (req, res) => {
+  if (API_KEY) {
+    const headerKey = req.header('x-api-key') || '';
+    if (headerKey !== API_KEY) return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+
+  const { userId, date, wins, misses, streak, goals, userName } = req.body || {};
+  if (!userId || !date) return res.status(400).json({ ok: false, error: 'missing userId/date' });
+
+  // Update stats
+  dailyStats[userId] = {
+    userId,
+    date,
+    wins: wins || 0,
+    misses: misses || 0,
+    streak: streak || 0,
+    goals: goals || 0,
+    userName: userName || '',
+    isOffline: false,
+    receivedAt: Date.now()
+  };
+
+  console.log(`Real-time stats updated for user ${userId}:`, dailyStats[userId]);
+
+  return res.json({ ok: true, message: 'Stats updated' });
+});
+
 app.listen(PORT, () => {
   console.log(`HTTP API listening on :${PORT}`);
 });
@@ -480,7 +559,7 @@ Masalan: 123456
 });
 
 // Helper functions
-function handleStatCommand(chatId) {
+async function handleStatCommand(chatId) {
   const user = botData.users[chatId];
   if (!user) {
     bot.sendMessage(chatId, '❌ Avval ilova bilan ulaning. /pair buyrug\'idan foydalaning.');
@@ -488,6 +567,25 @@ function handleStatCommand(chatId) {
   }
 
   const today = new Date().toISOString().split('T')[0];
+  
+  // Try to fetch real-time data from app (if user has push token)
+  if (user.pushToken) {
+    try {
+      // Send push notification to app to request stats
+      await sendExpoPushNotification(
+        user.pushToken,
+        '📊 Statistika so\'rovi',
+        'Bot statistikani so\'rayapti...',
+        { type: 'fetch_stats_request', userId: user.userId }
+      );
+      
+      // Wait a bit for app to respond
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    } catch (error) {
+      console.error('Failed to request stats from app:', error);
+    }
+  }
+
   const stats = dailyStats[user.userId];
 
   let message = `📊 Statistika - ${user.userName} ${user.userSurname}\n\n🆔 ID: ${user.userId}`;
@@ -497,8 +595,8 @@ function handleStatCommand(chatId) {
     if (stats.isOffline) {
       message += `\n⚠️ Internet aloqasi yo'q`;
     } else {
-      message += `\n✅ G'alaba: ${stats.wins}`;
-      message += `\n❌ Mag'lubiyat: ${stats.misses}`;
+      message += `\n✅ Bajarildi: ${stats.wins}`;
+      message += `\n❌ Bajarilmadi: ${stats.misses}`;
     }
     message += `\n🔥 Streak: ${stats.streak} kun`;
     message += `\n🎯 Maqsadlar: ${stats.goals} ta`;
@@ -607,7 +705,7 @@ bot.onText(/\/stat/, (msg) => {
 });
 
 // /send command
-bot.onText(/\/send(?:\s+(.+))?/, (msg, match) => {
+bot.onText(/\/send(?:\s+(.+))?/, async (msg, match) => {
   const chatId = msg.chat.id;
   const user = botData.users[chatId];
 
@@ -618,16 +716,46 @@ bot.onText(/\/send(?:\s+(.+))?/, (msg, match) => {
 
   const message = match[1] || 'Test notification';
 
-  bot.sendMessage(chatId, `
-📢 Notification yuborildi
+  // Send notification to app via Expo Push Notifications
+  let pushSent = false;
+  if (user.pushToken) {
+    try {
+      await sendExpoPushNotification(
+        user.pushToken,
+        '🔔 Telegramdan Xabar',
+        message,
+        { type: 'telegram_message' }
+      );
+      pushSent = true;
+    } catch (error) {
+      console.error('Failed to send push notification:', error);
+    }
+  }
+
+  // Send confirmation to Telegram
+  if (pushSent) {
+    bot.sendMessage(chatId, `
+✅ Notification yuborildi
 
 Xabar: "${message}"
 
 👤 Qabul qiluvchi: ${user.userName} ${user.userSurname}
 🆔 ID: ${user.userId}
 
-⚠️ Bu notification ilovaga yuborilishi kerak.
-  `);
+✅ Ilovaga notification yuborildi!
+    `);
+  } else {
+    bot.sendMessage(chatId, `
+⚠️ Notification yuborilmadi
+
+Xabar: "${message}"
+
+👤 Qabul qiluvchi: ${user.userName} ${user.userSurname}
+🆔 ID: ${user.userId}
+
+❌ Push token topilmadi. Ilovani oching va push token ro'yxatdan o'tkazing.
+    `);
+  }
 });
 
 // /reset command
