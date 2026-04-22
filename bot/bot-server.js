@@ -43,7 +43,8 @@ function saveData(data) {
 // Initialize data
 let botData = loadData();
 
-// Expo Push Notification function
+// Note: Expo Push Notifications requires EAS Build and project ID
+// For standalone apps, use local notifications instead
 async function sendExpoPushNotification(pushToken, title, body, data = {}) {
   try {
     const response = await fetch('https://exp.host/--/api/v2/push/send', {
@@ -66,7 +67,8 @@ async function sendExpoPushNotification(pushToken, title, body, data = {}) {
     return result;
   } catch (error) {
     console.error('Failed to send push notification:', error);
-    throw error;
+    // Don't throw error - fallback to Telegram message
+    return null;
   }
 }
 
@@ -375,6 +377,51 @@ app.post('/fetch-stats', (req, res) => {
   return res.json({ ok: true, message: 'Stats updated' });
 });
 
+// Store messages for users (in-memory)
+const userMessages = {};
+
+// Send message to user (for polling)
+app.post('/send-message', (req, res) => {
+  if (API_KEY) {
+    const headerKey = req.header('x-api-key') || '';
+    if (headerKey !== API_KEY) return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+
+  const { userId, message } = req.body || {};
+  if (!userId || !message) return res.status(400).json({ ok: false, error: 'missing userId/message' });
+
+  if (!userMessages[userId]) {
+    userMessages[userId] = [];
+  }
+
+  userMessages[userId].push({
+    message,
+    timestamp: Date.now()
+  });
+
+  console.log(`Message queued for user ${userId}:`, message);
+
+  return res.json({ ok: true, message: 'Message queued' });
+});
+
+// Get messages for user (for polling)
+app.post('/messages', (req, res) => {
+  if (API_KEY) {
+    const headerKey = req.header('x-api-key') || '';
+    if (headerKey !== API_KEY) return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+
+  const { userId } = req.body || {};
+  if (!userId) return res.status(400).json({ ok: false, error: 'missing userId' });
+
+  const messages = userMessages[userId] || [];
+  
+  // Clear messages after sending
+  userMessages[userId] = [];
+
+  return res.json({ ok: true, messages });
+});
+
 app.listen(PORT, () => {
   console.log(`HTTP API listening on :${PORT}`);
 });
@@ -567,25 +614,6 @@ async function handleStatCommand(chatId) {
   }
 
   const today = new Date().toISOString().split('T')[0];
-  
-  // Try to fetch real-time data from app (if user has push token)
-  if (user.pushToken) {
-    try {
-      // Send push notification to app to request stats
-      await sendExpoPushNotification(
-        user.pushToken,
-        '📊 Statistika so\'rovi',
-        'Bot statistikani so\'rayapti...',
-        { type: 'fetch_stats_request', userId: user.userId }
-      );
-      
-      // Wait a bit for app to respond
-      await new Promise(resolve => setTimeout(resolve, 2000));
-    } catch (error) {
-      console.error('Failed to request stats from app:', error);
-    }
-  }
-
   const stats = dailyStats[user.userId];
 
   let message = `📊 Statistika - ${user.userName} ${user.userSurname}\n\n🆔 ID: ${user.userId}`;
@@ -716,46 +744,30 @@ bot.onText(/\/send(?:\s+(.+))?/, async (msg, match) => {
 
   const message = match[1] || 'Test notification';
 
-  // Send notification to app via Expo Push Notifications
-  let pushSent = false;
-  if (user.pushToken) {
-    try {
-      await sendExpoPushNotification(
-        user.pushToken,
-        '🔔 Telegramdan Xabar',
-        message,
-        { type: 'telegram_message' }
-      );
-      pushSent = true;
-    } catch (error) {
-      console.error('Failed to send push notification:', error);
-    }
+  // Queue message for polling
+  if (userMessages[user.userId]) {
+    userMessages[user.userId].push({
+      message,
+      timestamp: Date.now()
+    });
+  } else {
+    userMessages[user.userId] = [{
+      message,
+      timestamp: Date.now()
+    }];
   }
 
   // Send confirmation to Telegram
-  if (pushSent) {
-    bot.sendMessage(chatId, `
-✅ Notification yuborildi
+  bot.sendMessage(chatId, `
+✅ Xabar yuborildi
 
 Xabar: "${message}"
 
 👤 Qabul qiluvchi: ${user.userName} ${user.userSurname}
 🆔 ID: ${user.userId}
 
-✅ Ilovaga notification yuborildi!
-    `);
-  } else {
-    bot.sendMessage(chatId, `
-⚠️ Notification yuborilmadi
-
-Xabar: "${message}"
-
-👤 Qabul qiluvchi: ${user.userName} ${user.userSurname}
-🆔 ID: ${user.userId}
-
-❌ Push token topilmadi. Ilovani oching va push token ro'yxatdan o'tkazing.
-    `);
-  }
+💡 Ilova 30 soniyada xabarni oladi.
+  `);
 });
 
 // /reset command
